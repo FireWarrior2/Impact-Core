@@ -315,8 +315,19 @@ class MultiBlockRecipeBuilder<R : GTMTE_Impact_BlockBase<*>>(val machine: R) {
             inputs[indexBus]?.toTypedArray().orEmpty()
         }
 
-        val isValidFluid = inputsF.isNotEmpty()
-        val isValidItems = inputs.isNotEmpty()
+        val simulateItems = arrayOfNulls<ItemStack>(listItems.size).apply {
+            listItems.forEachIndexed { index, stack ->
+                this[index] = stack.copy()
+            }
+        }
+        val simulateFluids = arrayOfNulls<FluidStack>(inputsF.size).apply {
+            inputsF.forEachIndexed { index, stack ->
+                this[index] = stack.copy()
+            }
+        }
+
+        val isValidItems = simulateItems.isNotEmpty()
+        val isValidFluid = simulateFluids.isNotEmpty()
 
         val maxEUt = min(voltageIn * ampsIn, GT_Values.V.last())
         val simulatedRecipeEUt = ProgressiveOverclock.simulatedRecipeEUt(recipe.mEUt.toLong())
@@ -332,16 +343,16 @@ class MultiBlockRecipeBuilder<R : GTMTE_Impact_BlockBase<*>>(val machine: R) {
 
             val isValidInputs = Utilits.checkInputs(
                 recipe,
-                false,
+                true,
                 !checkStackSize,
-                inputsF.toTypedArray(),
-                listItems,
+                simulateFluids,
+                simulateItems,
             )
             if (!isValidInputs) break
 
             machine.mCheckParallelCurrent = currentParallel
 
-            for (h in 0 until recipe.mOutputs.size) {
+            for (h in recipe.mOutputs.indices) {
                 val out = recipe.getOutput(h)
                 if (out != null) {
                     if (enabledChance) {
@@ -354,7 +365,7 @@ class MultiBlockRecipeBuilder<R : GTMTE_Impact_BlockBase<*>>(val machine: R) {
                 }
             }
 
-            for (i in 0 until recipe.mFluidOutputs.size) {
+            for (i in recipe.mFluidOutputs.indices) {
                 outputsF += recipe.getFluidOutput(i)
             }
         }
