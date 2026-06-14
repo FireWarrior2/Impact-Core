@@ -3,7 +3,7 @@ package com.impact.addon.gt.api.recipe
 import com.impact.mods.gregtech.tileentities.multi.implement.GTMTE_Impact_BlockBase
 import com.impact.mods.gregtech.tileentities.multi.implement.GT_MetaTileEntity_MultiParallelBlockBase
 import com.impact.util.Utilits
-import com.impact.util.multis.OverclockCalculate
+import com.impact.util.multis.ProgressiveOverclock
 import com.impact.util.multis.WorldProperties
 import com.impact.util.recipe.RecipeHelper
 import gregtech.api.enums.GT_Values
@@ -12,7 +12,7 @@ import gregtech.api.util.GT_Recipe
 import gregtech.api.util.GT_Utility
 import net.minecraft.item.ItemStack
 import net.minecraftforge.fluids.FluidStack
-import kotlin.concurrent.timer
+import kotlin.math.min
 
 @Suppress("unused")
 class MultiBlockRecipeBuilder<R : GTMTE_Impact_BlockBase<*>>(val machine: R) {
@@ -36,6 +36,7 @@ class MultiBlockRecipeBuilder<R : GTMTE_Impact_BlockBase<*>>(val machine: R) {
 
     private var recipeOk: Boolean = false
     private var voltageIn: Long = 0L
+    private var ampsIn: Int = 0
     private var tierFromVoltage: Int = 0
     private var recipe: GT_Recipe? = null
 
@@ -57,6 +58,7 @@ class MultiBlockRecipeBuilder<R : GTMTE_Impact_BlockBase<*>>(val machine: R) {
         machine.updateSlots()
         recipeOk = false
         voltageIn = 0L
+        ampsIn = 0
         tierFromVoltage = 0
         recipe = null
         inputs.clear()
@@ -70,6 +72,7 @@ class MultiBlockRecipeBuilder<R : GTMTE_Impact_BlockBase<*>>(val machine: R) {
         machine.updateSlots()
         recipeOk = false
         voltageIn = 0L
+        ampsIn = 0
         tierFromVoltage = 0
         recipe = null
         outputs.clear()
@@ -152,6 +155,21 @@ class MultiBlockRecipeBuilder<R : GTMTE_Impact_BlockBase<*>>(val machine: R) {
         return this
     }
 
+    fun addFakeItems(indexBus: Int, vararg items: ItemStack): MultiBlockRecipeBuilder<R> {
+
+        if (indexBus == -1) {
+            val list = inputs[0].orEmpty().toMutableList()
+            list += items
+            inputs[0] = list
+        } else {
+            val list = inputs[indexBus].orEmpty().toMutableList()
+            list += items
+            inputs[indexBus] = list
+        }
+
+        return this
+    }
+
     fun startSeparateRecipe(): Int {
         return inputs.keys.size
     }
@@ -182,9 +200,11 @@ class MultiBlockRecipeBuilder<R : GTMTE_Impact_BlockBase<*>>(val machine: R) {
 
         if (isGTVoltage) {
             voltageIn = machine.maxInputVoltageVanila
+            ampsIn = 1
             tierFromVoltage = GT_Utility.getTier(voltageIn).toInt().coerceIn(0, 15)
         } else {
-            voltageIn = machine.maxInputVoltage
+            voltageIn = machine.inputsVoltage
+            ampsIn = machine.inputsAmperage
             tierFromVoltage = GT_Utility.getTier(voltageIn).toInt().coerceIn(0, 15)
         }
         return this
@@ -223,7 +243,8 @@ class MultiBlockRecipeBuilder<R : GTMTE_Impact_BlockBase<*>>(val machine: R) {
         indexBus: Int = -1,
         enabledChance: Boolean = false,
         decreaseStackSizeBySuccess: Boolean = true,
-        checkStackSize: Boolean = true
+        checkStackSize: Boolean = true,
+        special: SpecialInput? = null,
     ): MultiBlockRecipeBuilder<R> {
         if (!recipeOk) return this
         val recipe = recipe ?: return this
@@ -236,7 +257,9 @@ class MultiBlockRecipeBuilder<R : GTMTE_Impact_BlockBase<*>>(val machine: R) {
 
         val inputFl = inputsF.toTypedArray()
 
-        val isConfirm = Utilits.checkInputs(
+        val isSpecialConfirm = special?.check(recipe) ?: true
+
+        val isConfirm = isSpecialConfirm && Utilits.checkInputs(
             recipe,
             false,
             !checkStackSize,
@@ -280,7 +303,7 @@ class MultiBlockRecipeBuilder<R : GTMTE_Impact_BlockBase<*>>(val machine: R) {
     fun checkInputEqualsParallel(
         indexBus: Int = -1,
         enabledChance: Boolean = false,
-        checkStackSize: Boolean = true
+        checkStackSize: Boolean = true,
     ): MultiBlockRecipeBuilder<R> {
         if (!recipeOk) return this
         if (machine !is GT_MetaTileEntity_MultiParallelBlockBase<*>) return this
@@ -295,16 +318,17 @@ class MultiBlockRecipeBuilder<R : GTMTE_Impact_BlockBase<*>>(val machine: R) {
         val isValidFluid = inputsF.isNotEmpty()
         val isValidItems = inputs.isNotEmpty()
 
-        val index = GT_Values.V.indexOfFirst { recipe.mEUt < it  }
-        val value = GT_Values.V.getOrNull(index) ?: return this
+        val maxEUt = min(voltageIn * ampsIn, GT_Values.V.last())
+        val simulatedRecipeEUt = ProgressiveOverclock.simulatedRecipeEUt(recipe.mEUt.toLong())
 
         for (currentParallel in 1..machine.maxParallel) {
             if (!(isValidFluid || isValidItems)) break
 
-            val simulateInit = (value - value / 16) * currentParallel
+            val simulatedTotalEUt = simulatedRecipeEUt * currentParallel
 
-            val isValidVoltage = simulateInit < voltageIn
-            if (!isValidVoltage) break
+            // Проверка только для симуляции кривых рецептов.
+            // Реальное потребление recipe.mEUt не меняем.
+            if (simulatedTotalEUt > maxEUt) break
 
             val isValidInputs = Utilits.checkInputs(
                 recipe,
@@ -345,7 +369,7 @@ class MultiBlockRecipeBuilder<R : GTMTE_Impact_BlockBase<*>>(val machine: R) {
         if (!recipeOk) return this
         val recipe = recipe ?: return this
 
-        if (needCleanRoom) {
+        if (!needCleanRoom) {
             recipeOk = WorldProperties.needCleanroom(recipe, machine)
             if (!recipeOk) return this
         }
@@ -372,8 +396,31 @@ class MultiBlockRecipeBuilder<R : GTMTE_Impact_BlockBase<*>>(val machine: R) {
         if (!recipeOk) return this
         val recipe = recipe ?: return this
 
-        OverclockCalculate.calculateOverclockedNessBasic(recipe.mEUt, recipe.mDuration, 1, voltageIn, machine)
-        machine.mEUt = if (machine.mEUt > 0) -machine.mEUt else machine.mEUt
+        val result = ProgressiveOverclock.calculateOverclock(
+            recipeEUt = recipe.mEUt,
+            recipeDuration = recipe.mDuration,
+            parallels = 1,
+            maxVoltage = voltageIn,
+            amperage = ampsIn,
+        )
+
+        machine.mEUt = result?.eut ?: 0
+        machine.mMaxProgresstime = result?.duration ?: 0
+
+        recipeOk = machine.mEUt != 0 && machine.mMaxProgresstime != 0
+
+        if (machine.eUt < recipe.mEUt) {
+            machine.mMaxProgresstime = 0
+            machine.mEUt = 0
+            recipeOk = false
+        }
+
+        if (recipeOk) {
+            machine.mEUt = if (machine.mEUt > 0) -machine.mEUt else machine.mEUt
+        } else {
+            machine.mMaxProgresstime = 0
+            machine.mEUt = 0
+        }
 
         return this
     }
@@ -383,52 +430,18 @@ class MultiBlockRecipeBuilder<R : GTMTE_Impact_BlockBase<*>>(val machine: R) {
         if (machine !is GT_MetaTileEntity_MultiParallelBlockBase<*>) return this
         val recipe = recipe ?: return this
 
-        val tEUt = recipe.mEUt * machine.mCheckParallelCurrent
-        val index = GT_Values.V.indexOfFirst { recipe.mEUt < it  }
-        val value = GT_Values.V.getOrNull(index) ?: return this
+        val result = ProgressiveOverclock.calculateOverclock(
+            recipeEUt = recipe.mEUt,
+            recipeDuration = recipe.mDuration,
+            parallels = machine.mCheckParallelCurrent,
+            maxVoltage = voltageIn,
+            amperage = ampsIn,
+        )
 
-        val simulateInit = (value - value / 16) * machine.mCheckParallelCurrent
+        machine.mEUt = result?.eut ?: 0
+        machine.mMaxProgresstime = result?.duration ?: 0
 
-        var simulate = if (tEUt > simulateInit) tEUt.toLong() else simulateInit
-
-        val hasOverclock = simulate * 4 < voltageIn
-
-        if (hasOverclock) {
-            val result = if (simulate > Int.MAX_VALUE) {
-                var divider = 0
-                while (simulate > Int.MAX_VALUE) {
-                    simulate /= DEFAULT_OVERCLOCK_TIME
-                    divider++
-                }
-                OverclockCalculate.calculateOverclockedNessBasicResult(
-                    aEUt = (simulate / (divider * DEFAULT_OVERCLOCK_TIME)).toInt(),
-                    aDuration = recipe.mDuration * (divider * DEFAULT_OVERCLOCK_TIME),
-                    mAmperage = 1,
-                    maxInputVoltage = voltageIn,
-                )
-            } else {
-                OverclockCalculate.calculateOverclockedNessBasicResult(
-                    aEUt = simulate.toInt(),
-                    aDuration = recipe.mDuration,
-                    mAmperage = 1,
-                    maxInputVoltage = voltageIn,
-                )
-            }
-
-            val total = if (tEUt >= simulateInit) {
-                result.eut
-            } else {
-                result.eut * tEUt / simulateInit.toInt()
-            }
-
-            machine.mEUt = total.coerceAtMost(Int.MAX_VALUE - 1)
-            machine.mMaxProgresstime = result.time
-        } else {
-            machine.mEUt = tEUt.coerceAtMost(Int.MAX_VALUE - 1)
-            machine.mMaxProgresstime = recipe.mDuration
-        }
-
-        recipeOk = !(machine.mMaxProgresstime == Int.MAX_VALUE - 1 && machine.mEUt == Int.MAX_VALUE - 1)
+        recipeOk = machine.mEUt != 0 && machine.mMaxProgresstime != 0
 
         if (machine.eUt < recipe.mEUt) {
             machine.mMaxProgresstime = 0
@@ -450,7 +463,7 @@ class MultiBlockRecipeBuilder<R : GTMTE_Impact_BlockBase<*>>(val machine: R) {
     fun checkOutputs(
         default: Boolean = false,
         indexBus: Int = -1,
-        af: AdditionalFun? = null
+        special: SpecialOutput? = null
     ): MultiBlockRecipeBuilder<R> {
         if (!recipeOk) return this
         val recipe = recipe ?: return this
@@ -476,11 +489,11 @@ class MultiBlockRecipeBuilder<R : GTMTE_Impact_BlockBase<*>>(val machine: R) {
         if (default) {
             machine.mOutputItems = recipe.mOutputs
             machine.mOutputFluids = recipe.mFluidOutputs
-            af?.get()
+            special?.output(recipe)
         } else {
             machine.mOutputItems = outputs.sortedItems().toTypedArray()
             machine.mOutputFluids = outputsF.sortedFluids().toTypedArray()
-            af?.get()
+            special?.output(recipe)
         }
         machine.updateSlots()
         return this
@@ -519,7 +532,11 @@ class MultiBlockRecipeBuilder<R : GTMTE_Impact_BlockBase<*>>(val machine: R) {
         return sortedList
     }
 
-    fun interface AdditionalFun {
-        fun get()
+    fun interface SpecialOutput {
+        fun output(recipe: GT_Recipe)
+    }
+
+    fun interface SpecialInput {
+        fun check(recipe: GT_Recipe): Boolean
     }
 }

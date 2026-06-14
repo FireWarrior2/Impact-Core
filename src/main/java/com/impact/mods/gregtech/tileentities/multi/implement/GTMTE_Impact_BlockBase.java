@@ -236,6 +236,46 @@ public abstract class GTMTE_Impact_BlockBase<MULTIS extends GTMTE_Impact_BlockBa
 		}
 		return rVoltage;
 	}
+
+	public long getInputsVoltage() {
+		long rVoltage = 0;
+		for (GT_MetaTileEntity_Hatch_Energy tHatch : mEnergyHatches) {
+			if (isValidMetaTileEntity(tHatch)) {
+				rVoltage += tHatch.getBaseMetaTileEntity().getInputVoltage();
+			}
+		}
+		for (GT_MetaTileEntity_Hatch_EnergyMulti tHatch : mEnergyHatchesMulti) {
+			if (isValidMetaTileEntity(tHatch)) {
+				rVoltage += tHatch.getBaseMetaTileEntity().getInputVoltage();
+			}
+		}
+		for (GTMTE_LaserEnergy_In tHatch : mLaserIn) {
+			if (isValidMetaTileEntity(tHatch)) {
+				rVoltage += tHatch.getBaseMetaTileEntity().getInputVoltage();
+			}
+		}
+		return rVoltage;
+	}
+
+	public int getInputsAmperage() {
+		int amps = 0;
+		for (GT_MetaTileEntity_Hatch_Energy tHatch : mEnergyHatches) {
+			if (isValidMetaTileEntity(tHatch)) {
+				amps += tHatch.mAmpers;
+			}
+		}
+		for (GT_MetaTileEntity_Hatch_EnergyMulti tHatch : mEnergyHatchesMulti) {
+			if (isValidMetaTileEntity(tHatch)) {
+				amps += tHatch.Amp;
+			}
+		}
+		for (GTMTE_LaserEnergy_In tHatch : mLaserIn) {
+			if (isValidMetaTileEntity(tHatch)) {
+				amps += tHatch.Amp;
+			}
+		}
+		return amps;
+	}
 	
 	@Override
 	public boolean addEnergyOutput(long aEU) {
